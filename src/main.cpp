@@ -346,6 +346,14 @@ static bool HttpGet(const std::wstring& url, const std::wstring& cookie,
 
 // 语义等价于正则 (\d+\.\d+)\s*BTC，但不做回溯：先用字面量定位 "BTC"，
 // 再向前解析紧邻的数字。整页正则扫描约 12.9 ms，此法约 0.003 ms。
+// Kryptex 会对请求下发 JS 反爬中间页（特征类名 gorizontal-vertikal，
+// 令牌 __js_p_），浏览器执行 JS 算出证明后重载。令牌有效期约 30 分钟，
+// 过期后无论新旧解析方式都取不到数据，必须重新从浏览器复制 Cookie。
+static bool IsAntiBotChallenge(const std::string& html) {
+    return html.find("gorizontal-vertikal") != std::string::npos ||
+           html.find("__js_p_") != std::string::npos;
+}
+
 static bool ParseBtcAmount(const std::string& html, std::wstring& out) {
     auto isSpace = [](char c) {
         return c == ' ' || c == '\t' || c == '\r' || c == '\n';
@@ -377,6 +385,11 @@ static bool ParseBalance(const std::string& utf8, std::wstring& btc, std::wstrin
     std::wstring html = Utf8ToWide(utf8);
     if (html.empty()) {
         err = L"响应内容为空";
+        return false;
+    }
+
+    if (IsAntiBotChallenge(utf8)) {
+        err = L"反爬验证已过期（__js_p_），请从浏览器重新复制 Cookie";
         return false;
     }
 
@@ -629,6 +642,11 @@ static std::wstring SchemeName(const std::string& scheme) {
 }
 
 static bool ParseHardware(const std::string& html, RefreshResult& r, std::wstring& err) {
+    if (IsAntiBotChallenge(html)) {
+        err = L"反爬验证已过期（__js_p_），请从浏览器重新复制 Cookie";
+        return false;
+    }
+
     std::string json = ExtractWorkerDataset(html);
     if (json.empty()) {
         err = L"硬件页中没找到 workerDataset，Cookie 可能已失效";
@@ -1122,9 +1140,15 @@ static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         }
 
         if (shown == 0) {
-            text(g_haveHardware ? L"暂无在线 worker" : L"硬件数据获取中…",
-                 12, 84, 336, 14, fNormal, cMuted,
-                 DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+            if (!g_hardwareError.empty()) {
+                // 硬件其实已经失败了，别再显示「获取中」误导用户。
+                text(g_hardwareError, 12, 84, 336, 14, fNormal, cRed,
+                     DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+            } else {
+                text(g_haveHardware ? L"暂无在线 worker" : L"硬件数据获取中…",
+                     12, 84, 336, 14, fNormal, cMuted,
+                     DT_LEFT | DT_VCENTER | DT_END_ELLIPSIS);
+            }
         }
         if (g_online > 8) {
             text(L"还有 " + std::to_wstring(g_online - 8) + L" 个在线 worker…",
