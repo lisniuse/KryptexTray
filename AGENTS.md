@@ -30,7 +30,7 @@ The build uses `/std:c++17 /utf-8 /W3 /O2`, links `winhttp`, `user32`, `gdi32` a
 
 ## Architecture
 
-1. `LoadConfig` reads `.env` from the executable directory, its parent, or the current directory. It must never print or persist the cookie value.
+1. `LoadConfig` reads `.env` from the executable's own directory first, then walks up the directory tree one level at a time. The current working directory is deliberately ignored, so the same exe never picks up a different config depending on where it was launched from. It must never print or persist the cookie value.
 2. `RefreshWorker` runs on a detached thread once per `REFRESH_SECONDS` (default 60) or when the user clicks Refresh.
    - `GET KRYPTEX_URL` (default `/site/dashboard`) and parse the balance with regexes.
    - `GET https://www.kryptex.com/site/hardware` and extract the `workerDataset` `<script type="application/json">` block.
@@ -127,7 +127,7 @@ build\KryptexTray.exe
 
 ## 架构
 
-1. `LoadConfig` 从 exe 同目录、上一级目录或当前目录读取 `.env`，绝不能打印或持久化 Cookie。
+1. `LoadConfig` 优先从 exe 同级目录读取 `.env`，没有则逐级向上查找。刻意不看当前工作目录——否则同一个 exe 会因为启动位置不同而读到不同的配置。绝不能打印或持久化 Cookie。
 2. `RefreshWorker` 在后台线程按 `REFRESH_SECONDS`（默认 60 秒）或手动刷新触发：
    - `GET KRYPTEX_URL`（默认 `/site/dashboard`），用正则提取余额。
    - `GET https://www.kryptex.com/site/hardware`，提取 `workerDataset` 的 JSON。

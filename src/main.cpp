@@ -157,21 +157,26 @@ static fs::path ExePath() {
     return fs::path(std::wstring(buf, n));
 }
 
+// 查找 .env：优先 exe 同级目录，没有再逐级向上查找。
+// 不看当前工作目录——那会让同一个 exe 因启动位置不同而读到不同的配置。
 static fs::path FindEnvFile() {
-    fs::path exe = ExePath();
-    fs::path dir = exe.parent_path();
-    std::error_code cwdEc;
-    fs::path cwd = fs::current_path(cwdEc);
-    fs::path candidates[] = {
-        dir / L".env",
-        dir.parent_path() / L".env",
-        cwdEc ? fs::path() : cwd / L".env",
-    };
-    for (const auto& p : candidates) {
-        std::error_code ec;
-        if (fs::exists(p, ec) && !ec) return p;
+    fs::path dir = ExePath().parent_path();
+    fs::path same = dir / L".env";
+
+    std::error_code ec;
+    if (fs::exists(same, ec) && !ec) return same;
+
+    fs::path cur = dir;
+    for (int depth = 0; depth < 16; ++depth) {
+        fs::path parent = cur.parent_path();
+        if (parent.empty() || parent == cur) break;
+        cur = parent;
+        fs::path cand = cur / L".env";
+        if (fs::exists(cand, ec) && !ec) return cand;
     }
-    return dir.parent_path() / L".env";
+
+    // 都没找到：报错时指向最优先的那个位置
+    return same;
 }
 
 static bool LoadConfig(Config& cfg, std::wstring& err) {
