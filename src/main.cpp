@@ -82,9 +82,6 @@ static HWND g_overlay = nullptr;
 static bool g_overlayVisible = false;
 static bool g_overlayClassRegistered = false;
 static std::wstring g_fontFace;
-static std::vector<BYTE> g_bg;
-static int g_bgW = 0, g_bgH = 0, g_bgX = 0, g_bgY = 0;
-static bool g_forceBackdrop = false;
 static NOTIFYICONDATAW g_nid{};
 static UINT g_taskbarCreated = 0;
 
@@ -684,75 +681,6 @@ static void GetOverlayRect(int& x, int& y, int& w, int& h) {
     y = wa.top + 24;
 }
 
-static void BlurBackdrop(BYTE* px, int w, int h) {
-    std::vector<BYTE> tmp(static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
-    const int radius = 6;
-
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            int sb = 0, sg = 0, sr = 0, n = 0;
-            int x0 = std::max(0, x - radius);
-            int x1 = std::min(w - 1, x + radius);
-            for (int xx = x0; xx <= x1; ++xx) {
-                const BYTE* q = px + (static_cast<size_t>(y) * w + xx) * 4;
-                sb += q[0]; sg += q[1]; sr += q[2]; ++n;
-            }
-            BYTE* o = tmp.data() + (static_cast<size_t>(y) * w + x) * 4;
-            o[0] = static_cast<BYTE>(sb / n);
-            o[1] = static_cast<BYTE>(sg / n);
-            o[2] = static_cast<BYTE>(sr / n);
-            o[3] = 255;
-        }
-    }
-
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            int sb = 0, sg = 0, sr = 0, n = 0;
-            int y0 = std::max(0, y - radius);
-            int y1 = std::min(h - 1, y + radius);
-            for (int yy = y0; yy <= y1; ++yy) {
-                const BYTE* q = tmp.data() + (static_cast<size_t>(yy) * w + x) * 4;
-                sb += q[0]; sg += q[1]; sr += q[2]; ++n;
-            }
-            BYTE* o = px + (static_cast<size_t>(y) * w + x) * 4;
-            o[0] = static_cast<BYTE>(sb / n * 0.32);
-            o[1] = static_cast<BYTE>(sg / n * 0.32);
-            o[2] = static_cast<BYTE>(sr / n * 0.32);
-            o[3] = 255;
-        }
-    }
-}
-
-static void CaptureBackdrop(int x, int y, int w, int h) {
-    HDC screen = GetDC(nullptr);
-    if (!screen) return;
-
-    HDC mem = CreateCompatibleDC(screen);
-    BITMAPINFO bmi{};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = w;
-    bmi.bmiHeader.biHeight = -h;
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-
-    void* bits = nullptr;
-    HBITMAP dib = CreateDIBSection(screen, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (dib && bits) {
-        HGDIOBJ old = SelectObject(mem, dib);
-        BitBlt(mem, 0, 0, w, h, screen, x, y, SRCCOPY);
-        SelectObject(mem, old);
-        g_bg.assign(static_cast<BYTE*>(bits),
-                    static_cast<BYTE*>(bits) + static_cast<size_t>(w) * h * 4);
-        g_bgW = w; g_bgH = h; g_bgX = x; g_bgY = y;
-        BlurBackdrop(g_bg.data(), w, h);
-    }
-
-    if (dib) DeleteObject(dib);
-    if (mem) DeleteDC(mem);
-    ReleaseDC(nullptr, screen);
-}
-
 static void UpdateTray() {
     std::wstring tip;
     if (g_haveBalance) {
@@ -833,20 +761,7 @@ static void PositionOverlay(HWND hwnd, int h) {
 
 static void RefreshOverlay() {
     if (!g_overlay || !g_overlayVisible) return;
-
-    int x, y, w, h;
-    GetOverlayRect(x, y, w, h);
-    bool force = g_forceBackdrop;
-    g_forceBackdrop = false;
-    if (force || x != g_bgX || y != g_bgY || w != g_bgW || h != g_bgH) {
-        ShowWindow(g_overlay, SW_HIDE);
-        PositionOverlay(g_overlay, h);
-        Sleep(20);
-        CaptureBackdrop(x, y, w, h);
-        ShowWindow(g_overlay, SW_SHOWNOACTIVATE);
-    } else {
-        PositionOverlay(g_overlay, h);
-    }
+    PositionOverlay(g_overlay, OverlayHeight());
     InvalidateRect(g_overlay, nullptr, TRUE);
 }
 
@@ -933,7 +848,7 @@ static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         GetClientRect(hwnd, &rc);
         int w = rc.right - rc.left;
         int h = rc.bottom - rc.top;
-        const BYTE backgroundAlpha = 235;
+        const BYTE backgroundAlpha = 220;
         if (w <= 0 || h <= 0) {
             EndPaint(hwnd, &ps);
             return 0;
@@ -962,16 +877,11 @@ static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
         if (bits) {
             BYTE* px = static_cast<BYTE*>(bits);
-            if (g_bgW == w && g_bgH == h &&
-                g_bg.size() == static_cast<size_t>(w) * static_cast<size_t>(h) * 4) {
-                std::copy(g_bg.begin(), g_bg.end(), px);
-            } else {
-                for (int i = 0; i < w * h; ++i) {
-                    px[i * 4 + 0] = 0;
-                    px[i * 4 + 1] = 0;
-                    px[i * 4 + 2] = 0;
-                    px[i * 4 + 3] = backgroundAlpha;
-                }
+            for (int i = 0; i < w * h; ++i) {
+                px[i * 4 + 0] = 0;
+                px[i * 4 + 1] = 0;
+                px[i * 4 + 2] = 0;
+                px[i * 4 + 3] = backgroundAlpha;
             }
         }
 
@@ -1110,18 +1020,9 @@ static LRESULT CALLBACK OverlayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
         if (bits) {
             BYTE* px = static_cast<BYTE*>(bits);
-            const bool useBg = (g_bgW == w && g_bgH == h &&
-                                g_bg.size() == static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
             for (int i = 0; i < w * h; ++i) {
                 BYTE* q = px + i * 4;
-                bool foreground;
-                if (useBg) {
-                    const BYTE* b = g_bg.data() + i * 4;
-                    foreground = (q[0] != b[0] || q[1] != b[1] || q[2] != b[2]);
-                } else {
-                    foreground = (q[0] || q[1] || q[2]);
-                }
-                q[3] = foreground ? 255 : backgroundAlpha;
+                q[3] = (q[0] || q[1] || q[2]) ? 255 : backgroundAlpha;
             }
         }
 
@@ -1169,12 +1070,7 @@ static void ToggleOverlay() {
     }
 
     if (!g_overlayVisible) {
-        int x, y, w, h;
-        GetOverlayRect(x, y, w, h);
-        ShowWindow(g_overlay, SW_HIDE);
-        PositionOverlay(g_overlay, h);
-        Sleep(20);
-        CaptureBackdrop(x, y, w, h);
+        PositionOverlay(g_overlay, OverlayHeight());
         ShowWindow(g_overlay, SW_SHOWNOACTIVATE);
         g_overlayVisible = true;
         InvalidateRect(g_overlay, nullptr, TRUE);
@@ -1269,7 +1165,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             ToggleOverlay();
             break;
         case kMenuRefresh:
-            g_forceBackdrop = true;
             RefreshAsync();
             break;
         case kMenuExit:

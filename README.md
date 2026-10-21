@@ -6,7 +6,7 @@
 
 ## English
 
-A lightweight Windows tray app that shows your Kryptex account balance, daily/monthly earnings, hashrate and online worker status on a frosted-glass desktop overlay.
+A lightweight Windows tray app that shows your Kryptex account balance, daily/monthly earnings, hashrate and online worker status on a semi-transparent desktop overlay.
 
 ### Features
 
@@ -15,7 +15,7 @@ A lightweight Windows tray app that shows your Kryptex account balance, daily/mo
 - Account balance in BTC plus the fiat estimate shown by Kryptex.
 - Daily/monthly profitability, total hashrate per coin, and per-worker hashrate, earnings, share counts and miner version.
 - Online workers only: offline workers disappear from the list and the panel shrinks automatically.
-- Frosted-glass overlay: a blurred, darkened snapshot of the desktop behind the panel, a subtle live alpha, and fully opaque text.
+- Semi-transparent black overlay (background alpha 220) with fully opaque text.
 - Non-topmost, click-through, never steals focus. Source Han Sans (思源黑体) with an automatic fallback chain.
 
 ### Requirements
@@ -65,8 +65,7 @@ The overlay is positioned at the top-right of the primary work area, is click-th
 - `GET /site/dashboard` returns server-rendered HTML; the balance and fiat estimate are extracted with regular expressions.
 - `GET /site/hardware` embeds a `workerDataset` JSON script with every worker's coin, online flag, 30-minute/24-hour hashrate, daily/monthly profit, share counts and miner version. Totals are summed from that dataset.
 - The overlay is a layered window with per-pixel alpha, rendered into a 32-bit DIB and committed with `UpdateLayeredWindow`.
-- Background pixels use alpha 235; text, dividers and status dots use alpha 255.
-- The frosted backdrop is a snapshot of the screen behind the panel: a radius-6 box blur darkened to 32%. It is refreshed when the overlay is shown, when its size changes, and when you press **Refresh**.
+- Background pixels are black at alpha 220; text, dividers and status dots use alpha 255.
 
 ### Fonts
 
@@ -91,7 +90,7 @@ MIT. See [LICENSE](LICENSE).
 
 ## 简体中文
 
-一个轻量的 Windows 托盘小工具，在桌面浮窗里显示 Kryptex 账户余额、日/月收益、算力和在线 worker 状态，带磨砂玻璃背景。
+一个轻量的 Windows 托盘小工具，在桌面浮窗里显示 Kryptex 账户余额、日/月收益、算力和在线 worker 状态，背景半透明。
 
 ### 功能
 
@@ -100,7 +99,7 @@ MIT. See [LICENSE](LICENSE).
 - 显示 BTC 余额和 Kryptex 给出的人民币估值。
 - 显示日/月盈利能力、各币种总算力，以及每个 worker 的算力、收益、份额和矿工版本。
 - 只显示在线 worker：离线 worker 不占列表空间，浮窗高度自动收缩。
-- 磨砂玻璃浮窗：截取并模糊、压暗背后的桌面作为底图，叠加轻微实时透明，文字完全不透明。
+- 黑色半透明背景（alpha 220），文字完全不透明。
 - 不置顶、鼠标穿透、不抢焦点。字体优先思源黑体，并带自动降级链。
 
 ### 环境要求
@@ -150,8 +149,7 @@ REFRESH_SECONDS=60
 - `GET /site/dashboard` 返回服务端渲染的 HTML，用正则提取 BTC 余额和人民币估值。
 - `GET /site/hardware` 里嵌有一段 `workerDataset` JSON，包含每个 worker 的币种、在线状态、30 分钟/24 小时算力、日/月收益、有效/过期/无效份额和矿工版本。汇总数据由这段 JSON 计算。
 - 浮窗是带逐像素 alpha 的 layered window，先绘制到 32 位 DIB，再通过 `UpdateLayeredWindow` 提交。
-- 背景 alpha 为 235；文字、分隔线和状态点为 255。
-- 磨砂底图是浮窗背后的屏幕快照：半径 6 的方框模糊，再压暗到 32%。打开浮窗、尺寸变化或手动点「刷新」时会重新抓取。
+- 背景为黑色、alpha 220；文字、分隔线和状态点为 255。
 
 ### 字体
 

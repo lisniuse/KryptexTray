@@ -4,7 +4,7 @@ Instructions for AI coding agents and human contributors working on KryptexTray.
 
 ## Project
 
-KryptexTray is a single-binary Win32 tray app that displays Kryptex account data on a frosted-glass overlay. It targets Windows 10/11, uses C++17 and MSVC, and has no third-party runtime dependencies.
+KryptexTray is a single-binary Win32 tray app that displays Kryptex account data on a semi-transparent overlay. It targets Windows 10/11, uses C++17 and MSVC, and has no third-party runtime dependencies.
 
 ## Layout
 
@@ -42,8 +42,7 @@ The build uses `/std:c++17 /utf-8 /W3 /O2`, links `winhttp`, `user32`, `gdi32` a
 
 - The overlay is `WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`, positioned top-right, never topmost.
 - Rendering goes to a 32-bit top-down DIB; `UpdateLayeredWindow` commits it. Do not reintroduce `SetLayeredWindowAttributes`; it conflicts with per-pixel alpha.
-- Background pixels: alpha `backgroundAlpha` (currently 235). Foreground pixels (text, border, dividers, dots): alpha 255.
-- The frosted backdrop is a screen snapshot: `BitBlt` the panel rect while the overlay is hidden, apply a radius-6 separable box blur, then multiply RGB by 0.32. It is cached until the panel is shown, resized, or Refresh is pressed.
+- Background pixels: alpha `backgroundAlpha` (currently 220). Foreground pixels (text, border, dividers, dots): alpha 255.
 - `UpdateLayeredWindow` expects premultiplied alpha. Keep background RGB at 0 (black) or premultiply any colored background correctly.
 - Only online workers are rendered. `OverlayHeight()` is based on `g_online`, not `g_workers.size()`.
 - `WM_NCHITTEST` returns `HTTRANSPARENT`; keep the window non-activating.
@@ -90,7 +89,7 @@ Co-authored-by: CommandCodeBot <noreply@commandcode.ai>
 Example:
 
 ```
-feat: add Kryptex tray monitor with frosted overlay
+feat: add Kryptex tray monitor with semi-transparent overlay
 
 Co-authored-by: CommandCodeBot <noreply@commandcode.ai>
 ```
@@ -103,7 +102,7 @@ Co-authored-by: CommandCodeBot <noreply@commandcode.ai>
 
 ## 项目
 
-KryptexTray 是一个单文件 Win32 托盘程序，用磨砂玻璃浮窗显示 Kryptex 账户数据。目标平台 Windows 10/11，C++17 + MSVC，无第三方运行时依赖。
+KryptexTray 是一个单文件 Win32 托盘程序，用半透明浮窗显示 Kryptex 账户数据。目标平台 Windows 10/11，C++17 + MSVC，无第三方运行时依赖。
 
 ## 目录
 
@@ -140,8 +139,7 @@ build\KryptexTray.exe
 
 - 浮窗样式：`WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`，位于右上角，绝不置顶。
 - 先绘制到 32 位 top-down DIB，再用 `UpdateLayeredWindow` 提交。不要再引入 `SetLayeredWindowAttributes`，它会和逐像素 alpha 冲突。
-- 背景 alpha 为 `backgroundAlpha`（当前 235）；文字、边框、分隔线、状态点为 255。
-- 磨砂底图是屏幕快照：浮窗隐藏时 `BitBlt` 目标区域，做半径 6 的可分离方框模糊，再乘 0.32 压暗。只在显示、尺寸变化或手动刷新时重新抓取。
+- 背景 alpha 为 `backgroundAlpha`（当前 220）；文字、边框、分隔线、状态点为 255。
 - `UpdateLayeredWindow` 使用预乘 alpha；背景 RGB 保持 0，或确保有颜色的背景已正确预乘。
 - 只渲染在线 worker；`OverlayHeight()` 基于 `g_online`，不是 `g_workers.size()`。
 - `WM_NCHITTEST` 返回 `HTTRANSPARENT`，窗口不抢焦点。
