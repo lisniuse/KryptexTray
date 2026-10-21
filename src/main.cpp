@@ -389,7 +389,7 @@ static bool ParseBalance(const std::string& utf8, std::wstring& btc, std::wstrin
     }
 
     if (IsAntiBotChallenge(utf8)) {
-        err = L"反爬验证已过期（__js_p_），请从浏览器重新复制 Cookie";
+        err = L"反爬验证已过期（__js_p_ 有效期约 30 分钟），请从浏览器重新复制 Cookie";
         return false;
     }
 
@@ -643,7 +643,7 @@ static std::wstring SchemeName(const std::string& scheme) {
 
 static bool ParseHardware(const std::string& html, RefreshResult& r, std::wstring& err) {
     if (IsAntiBotChallenge(html)) {
-        err = L"反爬验证已过期（__js_p_），请从浏览器重新复制 Cookie";
+        err = L"反爬验证已过期（__js_p_ 有效期约 30 分钟），请从浏览器重新复制 Cookie";
         return false;
     }
 
