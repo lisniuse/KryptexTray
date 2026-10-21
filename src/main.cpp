@@ -249,40 +249,115 @@ static bool ParseHttpsUrl(const std::wstring& url, std::wstring& host, std::wstr
     return true;
 }
 
-static bool HttpGet(const std::wstring& url, const std::wstring& cookie,
-                    std::string& body, DWORD& status, std::wstring& err) {
-    std::wstring host, path;
-    if (!ParseHttpsUrl(url, host, path, err)) return false;
+// ------------------------------------------------------------------
+// Kryptex 的 JS 反爬验证
+//
+// 服务端对疑似机器的请求会返回一张 JS 中间页，并下发 __js_p_=<code>,1800,0,0,0。
+// 浏览器执行页面里的 get_jhash(code) 得到 __jhash_，带着它重载才能拿到真页面；
+// 通过后服务端再下发 __hash_，客户端必须把它带回下一次请求。
+// 少做任何一步都会被判定未通过，程序会永远卡在中间页上。
+// 这里把这段证明直接算出来，程序进入挑战态后能自己走出来，不必再手工换 Cookie。
+// ------------------------------------------------------------------
+static int ComputeJHash(int code) {
+    int32_t x = 123456789;
+    int k = 0;
+    for (int32_t i = 0; i < 1677696; ++i) {
+        x = ((x + code) ^ (x + (x % 3) + (x % 17) + code) ^ i) % 16776960;
+        if (x % 117 == 0) k = (k + 1) % 1111;
+    }
+    return k;
+}
 
-    HINTERNET session = WinHttpOpen(
-        L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        L"(KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
-        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!session) {
-        err = L"WinHttpOpen 失败";
+// 自己维护 cookie 罐：反爬验证要求手动注入 __jhash_ / __hash__，
+// 交给 WinHTTP 的自动 cookie 容器会和手动发送的 Cookie 头互相打架。
+class CookieJar {
+public:
+    void Seed(const std::wstring& header) {
+        cookies_.clear();
+        size_t start = 0;
+        while (start < header.size()) {
+            size_t end = header.find(L';', start);
+            if (end == std::wstring::npos) end = header.size();
+            std::wstring one = TrimW(header.substr(start, end - start));
+            start = end + 1;
+            size_t eq = one.find(L'=');
+            if (eq == std::wstring::npos) continue;
+            Set(TrimW(one.substr(0, eq)), TrimW(one.substr(eq + 1)));
+        }
+    }
+
+    // 吸收一条 Set-Cookie，只取第一个 name=value，忽略 Path/Max-Age 等属性
+    void Absorb(const std::wstring& setCookie) {
+        size_t end = setCookie.find(L';');
+        std::wstring first = end == std::wstring::npos ? setCookie : setCookie.substr(0, end);
+        size_t eq = first.find(L'=');
+        if (eq == std::wstring::npos) return;
+        Set(TrimW(first.substr(0, eq)), TrimW(first.substr(eq + 1)));
+    }
+
+    void Set(const std::wstring& name, const std::wstring& value) {
+        if (name.empty()) return;
+        for (auto& kv : cookies_) {
+            if (_wcsicmp(kv.first.c_str(), name.c_str()) == 0) { kv.second = value; return; }
+        }
+        cookies_.emplace_back(name, value);
+    }
+
+    bool Get(const std::wstring& name, std::wstring& out) const {
+        for (const auto& kv : cookies_) {
+            if (_wcsicmp(kv.first.c_str(), name.c_str()) == 0) { out = kv.second; return true; }
+        }
         return false;
     }
-    WinHttpSetTimeouts(session, 10000, 10000, 10000, 30000);
 
-    HINTERNET connect = WinHttpConnect(session, host.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
-    if (!connect) {
-        err = L"连接 " + host + L" 失败";
-        WinHttpCloseHandle(session);
-        return false;
+    std::wstring Header() const {
+        std::wstring out;
+        for (const auto& kv : cookies_) {
+            if (!out.empty()) out += L"; ";
+            out += kv.first + L"=" + kv.second;
+        }
+        return out;
     }
 
+private:
+    std::vector<std::pair<std::wstring, std::wstring>> cookies_;
+};
+
+struct HttpReply {
+    DWORD status = 0;
+    std::string body;
+    std::wstring location;
+    std::vector<std::wstring> setCookies;
+};
+
+static void ParseRawHeaders(const std::wstring& raw, HttpReply& reply) {
+    size_t pos = 0;
+    while (pos < raw.size()) {
+        size_t end = raw.find(L"\r\n", pos);
+        if (end == std::wstring::npos) end = raw.size();
+        std::wstring line = raw.substr(pos, end - pos);
+        pos = end + 2;
+        size_t colon = line.find(L':');
+        if (colon == std::wstring::npos) continue;
+        std::wstring name = TrimW(line.substr(0, colon));
+        std::wstring value = TrimW(line.substr(colon + 1));
+        if (_wcsicmp(name.c_str(), L"Location") == 0) reply.location = value;
+        else if (_wcsicmp(name.c_str(), L"Set-Cookie") == 0) reply.setCookies.push_back(value);
+    }
+}
+
+// 发一次请求：不自动重定向、不自动带 cookie，响应头和正文原样取回。
+static bool RawGet(HINTERNET connect, const std::wstring& path,
+                   const std::wstring& cookieHeader, HttpReply& reply, std::wstring& err) {
     HINTERNET request = WinHttpOpenRequest(
         connect, L"GET", path.c_str(), nullptr,
         WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
     if (!request) {
         err = L"创建 HTTP 请求失败";
-        WinHttpCloseHandle(connect);
-        WinHttpCloseHandle(session);
         return false;
     }
 
-    DWORD redirect = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
+    DWORD redirect = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
     WinHttpSetOption(request, WINHTTP_OPTION_REDIRECT_POLICY, &redirect, sizeof(redirect));
 
     // HTML 高度可压缩：协商 gzip 后响应体积约为原来的 1/5，由 WinHTTP 透明解压。
@@ -290,7 +365,7 @@ static bool HttpGet(const std::wstring& url, const std::wstring& cookie,
     WinHttpSetOption(request, WINHTTP_OPTION_DECOMPRESSION, &decomp, sizeof(decomp));
 
     std::wstring headers =
-        L"Cookie: " + cookie + L"\r\n"
+        L"Cookie: " + cookieHeader + L"\r\n"
         L"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n"
         L"Accept-Encoding: gzip, deflate\r\n"
         L"Accept-Language: zh-CN,zh;q=0.9,en;q=0.8\r\n"
@@ -314,10 +389,24 @@ static bool HttpGet(const std::wstring& url, const std::wstring& cookie,
             err = L"读取 HTTP 状态码失败";
             break;
         }
-        status = code;
+        reply.status = code;
 
-        body.clear();
-        body.reserve(256 * 1024);
+        // 原始响应头：必须用 _CRLF 变体，RAW_HEADERS 返回的是 ASCIIZ 多字符串
+        DWORD rawLen = 0;
+        WinHttpQueryHeaders(request, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX,
+                            nullptr, &rawLen, WINHTTP_NO_HEADER_INDEX);
+        if (rawLen > 0) {
+            std::wstring raw(rawLen / sizeof(wchar_t) + 1, L'\0');
+            DWORD got = rawLen;
+            if (WinHttpQueryHeaders(request, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX,
+                                    raw.data(), &got, WINHTTP_NO_HEADER_INDEX)) {
+                raw.resize(got / sizeof(wchar_t));
+                ParseRawHeaders(raw, reply);
+            }
+        }
+
+        reply.body.clear();
+        reply.body.reserve(256 * 1024);
         std::vector<char> chunk(64 * 1024);
         for (;;) {
             DWORD avail = 0;
@@ -332,13 +421,111 @@ static bool HttpGet(const std::wstring& url, const std::wstring& cookie,
                 err = L"读取响应内容失败";
                 break;
             }
-            body.append(chunk.data(), read);
-            if (body.size() > 4 * 1024 * 1024) break;
+            reply.body.append(chunk.data(), read);
+            if (reply.body.size() > 4 * 1024 * 1024) break;
         }
         ok = true;
     } while (false);
 
     WinHttpCloseHandle(request);
+    return ok;
+}
+
+// 从 Location 里取出路径部分（可能是绝对 URL）
+static std::wstring PathFromLocation(const std::wstring& location) {
+    std::wstring path = location;
+    if (path.compare(0, 8, L"https://") == 0) {
+        size_t slash = path.find(L'/', 8);
+        if (slash == std::wstring::npos) return L"/";
+        path = path.substr(slash);
+    } else if (path.compare(0, 7, L"http://") == 0) {
+        size_t slash = path.find(L'/', 7);
+        if (slash == std::wstring::npos) return L"/";
+        path = path.substr(slash);
+    }
+    size_t q = path.find(L'?');
+    if (q != std::wstring::npos) path = path.substr(0, q);
+    if (path.empty() || path[0] != L'/') path = L"/" + path;
+    return path;
+}
+
+// 识别 Kryptex 的反爬中间页（在 HttpGet 之后定义，这里先声明）
+static bool IsAntiBotChallenge(const std::string& html);
+
+static bool HttpGet(const std::wstring& url, const std::wstring& cookie,
+                    std::string& body, DWORD& status, std::wstring& err) {
+    std::wstring host, path;
+    if (!ParseHttpsUrl(url, host, path, err)) return false;
+
+    // WinHttpConnect 只接受纯主机名，端口要单独拆出来
+    int port = INTERNET_DEFAULT_HTTPS_PORT;
+    size_t colon = host.rfind(L':');
+    if (colon != std::wstring::npos) {
+        int p = _wtoi(host.c_str() + colon + 1);
+        if (p > 0 && p < 65536) {
+            port = p;
+            host = host.substr(0, colon);
+        }
+    }
+
+    HINTERNET session = WinHttpOpen(
+        L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        L"(KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!session) {
+        err = L"WinHttpOpen 失败";
+        return false;
+    }
+    WinHttpSetTimeouts(session, 10000, 10000, 10000, 30000);
+
+    // 关掉 WinHTTP 的自动 cookie，自己管理（反爬验证要手动注入 __jhash_ / __hash_）
+    DWORD disable = WINHTTP_DISABLE_COOKIES;
+    WinHttpSetOption(session, WINHTTP_OPTION_DISABLE_FEATURE, &disable, sizeof(disable));
+
+    HINTERNET connect = WinHttpConnect(session, host.c_str(), port, 0);
+    if (!connect) {
+        err = L"连接 " + host + L" 失败";
+        WinHttpCloseHandle(session);
+        return false;
+    }
+
+    CookieJar jar;
+    jar.Seed(cookie);
+
+    bool ok = false;
+    std::wstring curPath = path;
+    for (int hop = 0; hop < 8; ++hop) {
+        HttpReply reply;
+        if (!RawGet(connect, curPath, jar.Header(), reply, err)) break;
+
+        for (const auto& sc : reply.setCookies) jar.Absorb(sc);
+
+        // 302：挑战通过后服务端会重定向回原地址，此时 __hash_ 已入库，跟过去即可
+        if (reply.status >= 300 && reply.status < 400 && !reply.location.empty()) {
+            curPath = PathFromLocation(reply.location);
+            continue;
+        }
+
+        if (IsAntiBotChallenge(reply.body)) {
+            std::wstring token;
+            if (!jar.Get(L"__js_p_", token) || token.empty()) {
+                err = L"反爬验证页，但服务器没有下发 __js_p_ 令牌";
+                break;
+            }
+            // 令牌形如 "687,1800,0,0,0"，第一个字段是挑战码
+            int code = _wtoi(token.c_str());
+            jar.Set(L"__jhash_", std::to_wstring(ComputeJHash(code)));
+            continue;
+        }
+
+        body = std::move(reply.body);
+        status = reply.status;
+        ok = true;
+        break;
+    }
+    if (!ok && err.empty()) err = L"重定向或反爬验证重试次数过多";
+
     WinHttpCloseHandle(connect);
     WinHttpCloseHandle(session);
     return ok;
@@ -389,7 +576,7 @@ static bool ParseBalance(const std::string& utf8, std::wstring& btc, std::wstrin
     }
 
     if (IsAntiBotChallenge(utf8)) {
-        err = L"反爬验证已过期（__js_p_ 有效期约 30 分钟），请从浏览器重新复制 Cookie";
+        err = L"反爬验证未通过，程序已自动重试仍被拦截，请从浏览器重新复制 Cookie";
         return false;
     }
 
@@ -643,7 +830,7 @@ static std::wstring SchemeName(const std::string& scheme) {
 
 static bool ParseHardware(const std::string& html, RefreshResult& r, std::wstring& err) {
     if (IsAntiBotChallenge(html)) {
-        err = L"反爬验证已过期（__js_p_ 有效期约 30 分钟），请从浏览器重新复制 Cookie";
+        err = L"反爬验证未通过，程序已自动重试仍被拦截，请从浏览器重新复制 Cookie";
         return false;
     }
 
